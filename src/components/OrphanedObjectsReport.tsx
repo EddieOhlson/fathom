@@ -1,15 +1,16 @@
 import { useState, useRef, useMemo, useEffect } from 'react'
-import { ScanSearch, X, AlertCircle, CheckCircle2, Download } from 'lucide-react'
+import { ScanSearch, Zap, X, AlertCircle, CheckCircle2, Download } from 'lucide-react'
 import { clsx } from 'clsx'
 import { downloadCsv, FilterTabs } from '../lib/reportUtils.tsx'
 import type { FathomInsights, DeepOrphanEntry } from '../logic/types.ts'
 import { useInsightsStore } from '../stores/useInsightsStore.ts'
 import { useSessionStore } from '../stores/useSessionStore.ts'
 import {
-  runDeepOrphanScan,
-  selectDeepScanCandidates,
+  runOrphanScan,
+  selectScanCandidates,
   estimateScanSeconds,
-} from '../logic/deepOrphanScan.ts'
+  type ScanMode,
+} from '../logic/orphanScan.ts'
 import type { AssetItem } from '@adamscloudera/octopai-api'
 
 type ToolFilter = 'all' | 'DB' | 'ETL'
@@ -48,13 +49,13 @@ function sampleOrphansToEntries(
 
 function mergeOrphans(
   sample: DeepOrphanEntry[],
-  deep: DeepOrphanEntry[] | null,
+  scanned: DeepOrphanEntry[] | null,
 ): DeepOrphanEntry[] {
-  if (!deep) return sample
+  if (!scanned) return sample
   const byKey = new Map<string, DeepOrphanEntry>()
   for (const e of sample) byKey.set(e.key, e)
-  // Deep scan entries win on duplicates (more authoritative)
-  for (const e of deep) byKey.set(e.key, e)
+  // Scan entries (deep or quick) win on duplicates (more authoritative)
+  for (const e of scanned) byKey.set(e.key, e)
   return [...byKey.values()].sort((a, b) => a.objectName.localeCompare(b.objectName))
 }
 
@@ -63,18 +64,24 @@ function fmtSecs(s: number): string {
   return `~${Math.ceil(s / 60)}m`
 }
 
+function scanLabel(mode: ScanMode | null): string {
+  return mode === 'quick' ? 'Quick scan' : 'Deep scan'
+}
+
 type Props = { insights: FathomInsights }
 
 export function OrphanedObjectsReport({ insights }: Props) {
   const {
     rawAssets,
-    deepOrphans,
-    deepScanProgress,
-    deepScanStatus,
-    deepScanError,
-    setDeepOrphans,
-    setDeepScanProgress,
-    setDeepScanStatus,
+    scanOrphans,
+    scanProgress,
+    scanStatus,
+    scanError,
+    scanMode,
+    setScanOrphans,
+    setScanProgress,
+    setScanStatus,
+    setScanMode,
   } = useInsightsStore()
   const { company, accessToken } = useSessionStore()
 
@@ -84,17 +91,17 @@ export function OrphanedObjectsReport({ insights }: Props) {
   const startRef = useRef<number>(0)
 
   useEffect(() => {
-    if (deepScanStatus !== 'scanning' || !deepScanProgress) {
+    if (scanStatus !== 'scanning' || !scanProgress) {
       setElapsed(0)
       return
     }
-    setElapsed(Math.floor((Date.now() - deepScanProgress.startedAt) / 1000))
+    setElapsed(Math.floor((Date.now() - scanProgress.startedAt) / 1000))
     const id = setInterval(
-      () => setElapsed(Math.floor((Date.now() - deepScanProgress.startedAt) / 1000)),
+      () => setElapsed(Math.floor((Date.now() - scanProgress.startedAt) / 1000)),
       1000,
     )
     return () => clearInterval(id)
-  }, [deepScanStatus, deepScanProgress?.startedAt])
+  }, [scanStatus, scanProgress?.startedAt])
 
   const assetMap = useMemo(() => buildAssetMap(rawAssets), [rawAssets])
 
@@ -107,8 +114,8 @@ export function OrphanedObjectsReport({ insights }: Props) {
   )
 
   const allOrphans = useMemo(
-    () => mergeOrphans(sampleEntries, deepOrphans),
-    [sampleEntries, deepOrphans],
+    () => mergeOrphans(sampleEntries, scanOrphans),
+    [sampleEntries, scanOrphans],
   )
 
   const filtered = useMemo(
@@ -124,44 +131,45 @@ export function OrphanedObjectsReport({ insights }: Props) {
     return counts
   }, [allOrphans])
 
-  const candidates = useMemo(
-    () => selectDeepScanCandidates(rawAssets),
-    [rawAssets],
-  )
-  const estimatedSecs = useMemo(
-    () => estimateScanSeconds(rawAssets),
-    [rawAssets],
-  )
+  const deepCandidates = useMemo(() => selectScanCandidates(rawAssets, 'deep'), [rawAssets])
+  const quickCandidates = useMemo(() => selectScanCandidates(rawAssets, 'quick'), [rawAssets])
+  const deepEstimatedSecs = useMemo(() => estimateScanSeconds(rawAssets, 'deep'), [rawAssets])
+  const quickEstimatedSecs = useMemo(() => estimateScanSeconds(rawAssets, 'quick'), [rawAssets])
 
-  async function handleDeepScan() {
+  const activeCandidates = scanMode === 'quick' ? quickCandidates : deepCandidates
+
+  async function handleScan(mode: ScanMode) {
     if (!accessToken || !company || rawAssets.length === 0) return
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
     startRef.current = Date.now()
 
-    setDeepScanStatus('scanning')
-    setDeepScanProgress({ done: 0, total: candidates.length, startedAt: startRef.current })
+    const candidates = selectScanCandidates(rawAssets, mode)
+    setScanMode(mode)
+    setScanStatus('scanning')
+    setScanProgress({ done: 0, total: candidates.length, startedAt: startRef.current })
 
     try {
-      const results = await runDeepOrphanScan(
+      const results = await runOrphanScan(
+        mode,
         company,
         accessToken,
         rawAssets,
         (done, total) =>
-          setDeepScanProgress({ done, total, startedAt: startRef.current }),
+          setScanProgress({ done, total, startedAt: startRef.current }),
         controller.signal,
       )
       if (!controller.signal.aborted) {
-        setDeepOrphans(results)
-        setDeepScanStatus('done')
+        setScanOrphans(results)
+        setScanStatus('done')
       }
     } catch (err) {
       if (!controller.signal.aborted) {
-        setDeepScanStatus('error', err instanceof Error ? err.message : String(err))
+        setScanStatus('error', err instanceof Error ? err.message : String(err))
       }
     } finally {
-      setDeepScanProgress(null)
+      setScanProgress(null)
     }
   }
 
@@ -178,18 +186,30 @@ export function OrphanedObjectsReport({ insights }: Props) {
 
   function handleCancelScan() {
     abortRef.current?.abort()
-    setDeepScanStatus('idle')
-    setDeepScanProgress(null)
+    setScanStatus('idle')
+    setScanProgress(null)
+  }
+
+  function badgeLabel(source: DeepOrphanEntry['source']): string {
+    if (source === 'deep') return 'deep scan'
+    if (source === 'quick') return 'quick scan'
+    return 'sample'
+  }
+
+  function badgeClass(source: DeepOrphanEntry['source']): string {
+    if (source === 'deep') return 'badge-blue'
+    if (source === 'quick') return 'bg-teal-100 text-teal-800 border-teal-200'
+    return 'bg-amber-100 text-amber-800 border-amber-200'
   }
 
   const scanPct =
-    deepScanProgress && deepScanProgress.total > 0
-      ? Math.round((deepScanProgress.done / deepScanProgress.total) * 100)
+    scanProgress && scanProgress.total > 0
+      ? Math.round((scanProgress.done / scanProgress.total) * 100)
       : 0
 
   return (
     <div className="space-y-4">
-      {/* Summary + deep scan CTA */}
+      {/* Summary + scan CTAs */}
       <div className="surface-card p-5 space-y-4">
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -208,31 +228,42 @@ export function OrphanedObjectsReport({ insights }: Props) {
           Initial scan: <span className="text-foreground font-medium">{sampleEntries.length}</span> orphans
           from <span className="text-foreground font-medium">{insights.lineageSampledCount}</span> sampled
           objects out of <span className="text-foreground font-medium">{insights.totalAssets.toLocaleString()}</span> total.
-          {deepScanStatus === 'idle' && ' Run a deep scan to check more of the catalog.'}
+          {scanStatus === 'idle' && ' Run a scan to check more of the catalog.'}
         </div>
 
-        {/* Deep scan panel */}
-        {deepScanStatus === 'idle' && (
-          <div className="flex items-center gap-3">
+        {/* Scan panel */}
+        {scanStatus === 'idle' && (
+          <div className="flex items-center gap-3 flex-wrap">
             <button
-              onClick={handleDeepScan}
+              onClick={() => handleScan('quick')}
               disabled={rawAssets.length === 0}
               className="btn-primary"
+            >
+              <Zap className="w-4 h-4" />
+              Quick scan
+            </button>
+            <span className="text-xs text-muted">
+              Check {quickCandidates.length.toLocaleString()} objects (~30% sample, {fmtSecs(quickEstimatedSecs)})
+            </span>
+            <button
+              onClick={() => handleScan('deep')}
+              disabled={rawAssets.length === 0}
+              className="btn-ghost border border-border"
             >
               <ScanSearch className="w-4 h-4" />
               Deep scan
             </button>
             <span className="text-xs text-muted">
-              Check {candidates.length.toLocaleString()} DB + BI objects ({fmtSecs(estimatedSecs)})
+              Check all {deepCandidates.length.toLocaleString()} DB + ETL objects ({fmtSecs(deepEstimatedSecs)})
             </span>
           </div>
         )}
 
-        {deepScanStatus === 'scanning' && deepScanProgress && (
+        {scanStatus === 'scanning' && scanProgress && (
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs">
               <span className="text-muted">
-                Deep scan: {deepScanProgress.done.toLocaleString()} / {deepScanProgress.total.toLocaleString()} objects
+                {scanLabel(scanMode)}: {scanProgress.done.toLocaleString()} / {scanProgress.total.toLocaleString()} objects
               </span>
               <div className="flex items-center gap-3">
                 <span className="font-mono text-muted tabular-nums">{elapsed}s</span>
@@ -251,19 +282,19 @@ export function OrphanedObjectsReport({ insights }: Props) {
           </div>
         )}
 
-        {deepScanStatus === 'done' && deepOrphans !== null && (
+        {scanStatus === 'done' && scanOrphans !== null && (
           <div className="flex items-center gap-2 text-xs text-green-700">
             <CheckCircle2 className="w-4 h-4 text-green-600 shrink-0" />
-            Deep scan complete — {deepOrphans.length.toLocaleString()} orphans found across{' '}
-            {candidates.length.toLocaleString()} objects scanned.
+            {scanLabel(scanMode)} complete — {scanOrphans.length.toLocaleString()} orphans found across{' '}
+            {activeCandidates.length.toLocaleString()} objects scanned.
           </div>
         )}
 
-        {deepScanStatus === 'error' && deepScanError && (
+        {scanStatus === 'error' && scanError && (
           <div className="flex items-start gap-2 text-xs text-red-600">
             <AlertCircle className="w-4 h-4 shrink-0 mt-px" />
-            {deepScanError}
-            <button onClick={handleDeepScan} className="underline ml-1">
+            {scanError}
+            <button onClick={() => handleScan(scanMode ?? 'deep')} className="underline ml-1">
               Retry
             </button>
           </div>
@@ -328,13 +359,8 @@ export function OrphanedObjectsReport({ insights }: Props) {
                       {o.databaseName || '—'}
                     </td>
                     <td className="px-3 py-1.5">
-                      <span
-                        className={clsx(
-                          'badge',
-                          o.source === 'deep' ? 'badge-blue' : 'bg-amber-100 text-amber-800 border-amber-200',
-                        )}
-                      >
-                        {o.source === 'deep' ? 'deep scan' : 'sample'}
+                      <span className={clsx('badge', badgeClass(o.source))}>
+                        {badgeLabel(o.source)}
                       </span>
                     </td>
                   </tr>
@@ -349,11 +375,11 @@ export function OrphanedObjectsReport({ insights }: Props) {
         </div>
       )}
 
-      {allOrphans.length === 0 && deepScanStatus !== 'scanning' && (
+      {allOrphans.length === 0 && scanStatus !== 'scanning' && (
         <div className="surface-card p-8 text-center">
           <p className="text-sm text-muted">No orphaned objects found in the current scan.</p>
-          {deepScanStatus === 'idle' && (
-            <p className="text-xs text-muted mt-1">Run a deep scan to check a larger portion of the catalog.</p>
+          {scanStatus === 'idle' && (
+            <p className="text-xs text-muted mt-1">Run a scan to check a larger portion of the catalog.</p>
           )}
         </div>
       )}

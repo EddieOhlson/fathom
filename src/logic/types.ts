@@ -95,7 +95,7 @@ export type DeepOrphanEntry = {
   objectType: string
   toolName: string
   toolType: string
-  source: 'sample' | 'deep'
+  source: 'sample' | 'deep' | 'quick'
 }
 
 export type DeepScanProgress = {
