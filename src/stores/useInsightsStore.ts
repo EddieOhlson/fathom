@@ -1,13 +1,17 @@
 import { create } from 'zustand'
 import type { FathomInsights, DeepOrphanEntry, DeepScanProgress } from '../logic/types.ts'
 import type { ScanMode } from '../logic/orphanScan.ts'
+import { buildCatalogStats } from '../logic/analyzer.ts'
 import type { AssetItem } from '@adamscloudera/octopai-api'
 
 export type ScanStatus = 'idle' | 'scanning' | 'done' | 'error'
 
+export type PartialCatalogStats = ReturnType<typeof buildCatalogStats> & { totalAssets: number }
+
 type InsightsState = {
   insights: FathomInsights | null
   rawAssets: AssetItem[]
+  partialCatalogStats: PartialCatalogStats | null
   scanOrphans: DeepOrphanEntry[] | null
   scanProgress: DeepScanProgress | null
   scanStatus: ScanStatus
@@ -15,6 +19,7 @@ type InsightsState = {
   scanMode: ScanMode | null
   setInsights: (insights: FathomInsights) => void
   setRawAssets: (assets: AssetItem[]) => void
+  setPartialCatalogStats: (stats: PartialCatalogStats | null) => void
   clearInsights: () => void
   setScanOrphans: (orphans: DeepOrphanEntry[]) => void
   setScanProgress: (p: DeepScanProgress | null) => void
@@ -37,6 +42,7 @@ try { const _s = localStorage.getItem('fathom:scanMode'); if (_s === 'deep' || _
 export const useInsightsStore = create<InsightsState>((set) => ({
   insights: _initialInsights,
   rawAssets: [],
+  partialCatalogStats: null,
   scanOrphans: _initialScanOrphans,
   scanProgress: null,
   scanStatus: _initialScanStatus,
@@ -47,11 +53,13 @@ export const useInsightsStore = create<InsightsState>((set) => ({
     try { localStorage.setItem('fathom:insights', JSON.stringify(insights)) } catch (_) {}
   },
   setRawAssets: (rawAssets) => set({ rawAssets }),
+  setPartialCatalogStats: (partialCatalogStats) => set({ partialCatalogStats }),
   clearInsights: () => {
     try { ['fathom:insights', 'fathom:scanOrphans', 'fathom:scanStatus', 'fathom:scanMode'].forEach(k => localStorage.removeItem(k)) } catch (_) {}
     set({
       insights: null,
       rawAssets: [],
+      partialCatalogStats: null,
       scanOrphans: null,
       scanProgress: null,
       scanStatus: 'idle',

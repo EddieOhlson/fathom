@@ -1,6 +1,6 @@
 import { useRef } from 'react'
 import { octopai } from '../logic/octopaiApi.ts'
-import { selectSampleKeys, analyze } from '../logic/analyzer.ts'
+import { selectSampleKeys, analyze, buildCatalogStats } from '../logic/analyzer.ts'
 import type { AssetItem } from '@adamscloudera/octopai-api'
 import type { LineageResult, LineageDashboard } from '../logic/types.ts'
 import { useSessionStore } from '../stores/useSessionStore.ts'
@@ -11,7 +11,7 @@ const CONCURRENCY = 10
 export function useAnalysis() {
   const analyzeAbortRef = useRef<AbortController | null>(null)
   const { company, accessToken, setStatus, setScanProgress } = useSessionStore()
-  const { setInsights, setRawAssets, clearInsights } = useInsightsStore()
+  const { setInsights, setRawAssets, setPartialCatalogStats, clearInsights } = useInsightsStore()
 
   async function runAnalysis() {
     if (!accessToken) return
@@ -25,11 +25,21 @@ export function useAnalysis() {
     setScanProgress({ phase: 'catalog', done: 0, total: 0, startedAt: catalogStart })
 
     let assets: AssetItem[] = []
+    const assetsSoFar: AssetItem[] = []
     try {
       assets = await octopai.queryAllAssets(
         company,
         accessToken,
-        (fetched) => setScanProgress({ phase: 'catalog', done: fetched, total: 0, startedAt: catalogStart }),
+        (fetched, pageItems) => {
+          setScanProgress({ phase: 'catalog', done: fetched, total: 0, startedAt: catalogStart })
+          // Progressive loading: recompute the cheap catalog-only stats on every
+          // page so the dashboard can show live, growing numbers during the
+          // fetch instead of a bare progress bar. These are exact counts over
+          // whatever has landed so far, not a sample -- they just converge as
+          // more pages arrive, same as the final numbers will be.
+          assetsSoFar.push(...pageItems)
+          setPartialCatalogStats({ ...buildCatalogStats(assetsSoFar), totalAssets: assetsSoFar.length })
+        },
         controller.signal,
       )
     } catch (err) {

@@ -30,7 +30,7 @@ type LineageIndex = {
 // Sub-functions
 // ---------------------------------------------------------------------------
 
-function buildCatalogStats(assets: AssetItem[]): {
+export function buildCatalogStats(assets: AssetItem[]): {
   toolBreakdown: ToolBreakdownEntry[]
   connectionBreakdown: ConnectionBreakdownEntry[]
   distinctDatabases: number

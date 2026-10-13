@@ -14,7 +14,7 @@ export type OctopaiClient = {
   queryAllAssets(
     company: string,
     token: string,
-    onProgress?: (fetched: number) => void,
+    onProgress?: (fetched: number, pageItems: AssetItem[]) => void,
     signal?: AbortSignal,
   ): Promise<AssetItem[]>
   // Fetch a small batch (200) for building the connectionName → connectionId index.
@@ -195,7 +195,7 @@ export function createOctopaiClient(proxyBase: string): OctopaiClient {
   async function queryAllAssets(
     company: string,
     token: string,
-    onProgress?: (fetched: number) => void,
+    onProgress?: (fetched: number, pageItems: AssetItem[]) => void,
     signal?: AbortSignal,
   ): Promise<AssetItem[]> {
     const all: AssetItem[] = []
@@ -211,7 +211,7 @@ export function createOctopaiClient(proxyBase: string): OctopaiClient {
       )
       const page = normalizeResponse(resp)
       all.push(...page.items)
-      onProgress?.(all.length)
+      onProgress?.(all.length, page.items)
       if (page.items.length < DEFAULT_PAGE_SIZE) break
       offset += DEFAULT_PAGE_SIZE
     }

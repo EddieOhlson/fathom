@@ -5,6 +5,7 @@ import { octopai } from '../logic/octopaiApi.ts'
 import { useSessionStore } from '../stores/useSessionStore.ts'
 import { useInsightsStore } from '../stores/useInsightsStore.ts'
 import { useAnalysis } from '../hooks/useAnalysis.ts'
+import { PartialCatalogCard } from './PartialCatalogCard.tsx'
 
 function TokenExpiry({ expiry }: { expiry: string }) {
   if (!expiry) return null
@@ -21,7 +22,7 @@ export function LoginPanel() {
     company, accessToken, accessExpiry, displayName, status, error,
     scanProgress, setConfig, setTokens, setStatus, clearSession,
   } = useSessionStore()
-  const { clearInsights } = useInsightsStore()
+  const { clearInsights, partialCatalogStats } = useInsightsStore()
   const { runAnalysis, cancelAnalysis } = useAnalysis()
 
   const [companyInput, setCompanyInput] = useState(company)
@@ -211,6 +212,8 @@ export function LoginPanel() {
           {error}
         </p>
       )}
+
+      {isBusy && partialCatalogStats && <PartialCatalogCard stats={partialCatalogStats} />}
     </div>
   )
 }
