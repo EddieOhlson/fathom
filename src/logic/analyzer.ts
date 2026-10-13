@@ -30,18 +30,24 @@ type LineageIndex = {
 // Sub-functions
 // ---------------------------------------------------------------------------
 
-export function buildCatalogStats(assets: AssetItem[]): {
-  toolBreakdown: ToolBreakdownEntry[]
-  connectionBreakdown: ConnectionBreakdownEntry[]
-  distinctDatabases: number
-  distinctSchemas: number
-} {
-  const toolCounts = new Map<string, { toolType: string; count: number }>()
-  const connCounts = new Map<string, { toolName: string; count: number }>()
-  const dbs = new Set<string>()
-  const schemas = new Set<string>()
+export type CatalogAccumulator = {
+  toolCounts: Map<string, { toolType: string; count: number }>
+  connCounts: Map<string, { toolName: string; count: number }>
+  dbs: Set<string>
+  schemas: Set<string>
+}
 
-  for (const a of assets) {
+export function createCatalogAccumulator(): CatalogAccumulator {
+  return { toolCounts: new Map(), connCounts: new Map(), dbs: new Set(), schemas: new Set() }
+}
+
+// Folds ONLY the given (new) assets into an existing accumulator -- O(newAssets),
+// never O(everything seen so far). Call this once per page during a progressive
+// fetch; never re-run it over the full running total, or the cost of every
+// subsequent page grows with how much has already been fetched.
+export function updateCatalogAccumulator(acc: CatalogAccumulator, newAssets: AssetItem[]): void {
+  const { toolCounts, connCounts, dbs, schemas } = acc
+  for (const a of newAssets) {
     const tool = a.toolName ?? 'Unknown'
     const existing = toolCounts.get(tool)
     if (existing) { existing.count++ } else { toolCounts.set(tool, { toolType: a.toolType ?? 'Unknown', count: 1 }) }
@@ -55,16 +61,38 @@ export function buildCatalogStats(assets: AssetItem[]): {
       schemas.add(`${a.databaseName ?? ''}.${a.schemaName}`.toLowerCase())
     }
   }
+}
 
-  const toolBreakdown: ToolBreakdownEntry[] = [...toolCounts.entries()]
+// Cheap: O(distinct tools + distinct connections), never O(total assets seen).
+// Safe to call after every page.
+export function deriveCatalogStats(acc: CatalogAccumulator): {
+  toolBreakdown: ToolBreakdownEntry[]
+  connectionBreakdown: ConnectionBreakdownEntry[]
+  distinctDatabases: number
+  distinctSchemas: number
+} {
+  const toolBreakdown: ToolBreakdownEntry[] = [...acc.toolCounts.entries()]
     .map(([toolName, { toolType, count }]) => ({ toolName, toolType, count }))
     .sort((a, b) => b.count - a.count)
 
-  const connectionBreakdown: ConnectionBreakdownEntry[] = [...connCounts.entries()]
+  const connectionBreakdown: ConnectionBreakdownEntry[] = [...acc.connCounts.entries()]
     .map(([connectionName, { toolName, count }]) => ({ connectionName, toolName, count }))
     .sort((a, b) => b.count - a.count)
 
-  return { toolBreakdown, connectionBreakdown, distinctDatabases: dbs.size, distinctSchemas: schemas.size }
+  return { toolBreakdown, connectionBreakdown, distinctDatabases: acc.dbs.size, distinctSchemas: acc.schemas.size }
+}
+
+// One-shot convenience for the final, complete-catalog analysis pass (called
+// once in analyze(), not per-page -- O(assets.length) exactly once is fine).
+export function buildCatalogStats(assets: AssetItem[]): {
+  toolBreakdown: ToolBreakdownEntry[]
+  connectionBreakdown: ConnectionBreakdownEntry[]
+  distinctDatabases: number
+  distinctSchemas: number
+} {
+  const acc = createCatalogAccumulator()
+  updateCatalogAccumulator(acc, assets)
+  return deriveCatalogStats(acc)
 }
 
 function buildLineageIndex(assets: AssetItem[], lineageResults: LineageResult[]): LineageIndex {

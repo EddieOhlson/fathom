@@ -1,6 +1,9 @@
 import { useRef } from 'react'
 import { octopai } from '../logic/octopaiApi.ts'
-import { selectSampleKeys, analyze, buildCatalogStats } from '../logic/analyzer.ts'
+import {
+  selectSampleKeys, analyze,
+  createCatalogAccumulator, updateCatalogAccumulator, deriveCatalogStats,
+} from '../logic/analyzer.ts'
 import type { AssetItem } from '@adamscloudera/octopai-api'
 import type { LineageResult, LineageDashboard } from '../logic/types.ts'
 import { useSessionStore } from '../stores/useSessionStore.ts'
@@ -25,20 +28,24 @@ export function useAnalysis() {
     setScanProgress({ phase: 'catalog', done: 0, total: 0, startedAt: catalogStart })
 
     let assets: AssetItem[] = []
-    const assetsSoFar: AssetItem[] = []
+    let assetsSoFarCount = 0
+    const catalogAcc = createCatalogAccumulator()
     try {
       assets = await octopai.queryAllAssets(
         company,
         accessToken,
         (fetched, pageItems) => {
           setScanProgress({ phase: 'catalog', done: fetched, total: 0, startedAt: catalogStart })
-          // Progressive loading: recompute the cheap catalog-only stats on every
-          // page so the dashboard can show live, growing numbers during the
-          // fetch instead of a bare progress bar. These are exact counts over
-          // whatever has landed so far, not a sample -- they just converge as
-          // more pages arrive, same as the final numbers will be.
-          assetsSoFar.push(...pageItems)
-          setPartialCatalogStats({ ...buildCatalogStats(assetsSoFar), totalAssets: assetsSoFar.length })
+          // Progressive loading: fold only the NEW page into the running
+          // accumulator (O(page size)) and re-derive the breakdown from it
+          // (O(distinct tools/connections)) -- never re-scan everything
+          // fetched so far. On a large tenant, re-scanning the whole running
+          // total on every page turns an O(n) fetch into O(n^2) of main-thread
+          // work and can stall the tab badly enough to look like a dropped
+          // connection, even though nothing on the network actually failed.
+          updateCatalogAccumulator(catalogAcc, pageItems)
+          assetsSoFarCount += pageItems.length
+          setPartialCatalogStats({ ...deriveCatalogStats(catalogAcc), totalAssets: assetsSoFarCount })
         },
         controller.signal,
       )
